@@ -36,6 +36,7 @@ In this case it is about connecting a UNITERM 3 8kw heat pump.
 Practical tips
 You can use the "Heat Pump Error" sensor in HA directly as a trigger for a notification on your phone:
 yaml# In HA automation (NOT in this ESPHome config!)
+```
 trigger:
   - platform: state
     entity_id: binary_sensor.unitherm3_heat_pump_error
