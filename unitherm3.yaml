@@ -28,11 +28,6 @@ wifi:
   password: !secret wifi_password
   min_auth_mode: WPA2
 
-  manual_ip:
-    static_ip: 192.168.20.90
-    gateway: 192.168.20.1
-    subnet: 255.255.255.0
-
   ap:
     ssid: "unitherm3"
     password: "123456798"
