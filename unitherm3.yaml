@@ -1,0 +1,925 @@
+# ============================================================
+# UNITERM 3 (Cooper & Hunter) air-to-water warmtepomp
+# ESPHome 2026.5.x — Wemos D1 (ESP8266) + RS485 transceiver
+# ============================================================
+
+esphome:
+  name: unitherm3
+  min_version: 2026.5.0
+
+esp8266:
+  board: d1
+
+# UART deelt GPIO1/GPIO3 met de seriële logger.
+# Logger MOET over serial uit, anders krijg je gegarandeerd CRC-fouten.
+logger:
+  baud_rate: 0
+  level: INFO
+
+api:
+  encryption:
+    key: ""
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  min_auth_mode: WPA2
+
+  manual_ip:
+    static_ip: 192.168.20.90
+    gateway: 192.168.20.1
+    subnet: 255.255.255.0
+
+  ap:
+    ssid: "unitherm3"
+    password: "123456798"
+
+# ============================================================
+# UART + Modbus RTU — protocol: 9600 8N1 (PDF §4.3)
+# ============================================================
+uart:
+  id: mod_bus
+  tx_pin: GPIO1
+  rx_pin: GPIO3
+  baud_rate: 9600
+  stop_bits: 1
+  parity: NONE
+  data_bits: 8
+
+modbus:
+  id: modbus_unitherm3
+  uart_id: mod_bus
+  flow_control_pin: GPIO4
+  send_wait_time: 200ms
+
+modbus_controller:
+  - id: unitherm3
+    modbus_id: modbus_unitherm3
+    address: 0x01
+    setup_priority: -10
+    update_interval: 20s
+    command_throttle: 100ms
+
+# ============================================================
+# SENSORS  (read-only holding registers)
+# ============================================================
+sensor:
+
+  # ---------- Temperaturen ----------
+
+  # Word 130 — Remote Room Temp Sensor (Float Type, 1°C)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: remote_room_temp
+    name: "Remote Room Temp"
+    address: 130
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+
+  # Word 118 — Outdoor Temp (Float Type, -30~100°C)
+  # LET OP: als waardes 10× te hoog zijn → activeer de multiply filter
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: outside_temp
+    name: "Outside Temp"
+    address: 118
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    skip_updates: 2
+    # filters:
+    #   - multiply: 0.1
+
+  # Word 126 — Water Tank Sensor 1
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: boiler_temp_1
+    name: "Boiler Temp 1"
+    address: 126
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    skip_updates: 4
+
+  # Word 127 — Water Tank Sensor 2
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: boiler_temp_2
+    name: "Boiler Temp 2"
+    address: 127
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    skip_updates: 4
+
+  # Word 125 — Plate exchanger water-IN (×10, 0.5°C resolutie)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: incoming_water_temp
+    name: "Incoming Water Temp"
+    address: 125
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+
+  # Word 123 — E-heater leaving water (×10, 0.5°C resolutie)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: outgoing_water_temp
+    name: "Outgoing Water Temp"
+    address: 123
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+
+  # Word 122 — Plate exchanger water-OUT (×10, 0.5°C)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: plate_water_out_temp
+    name: "Plate Exchanger Water Out"
+    address: 122
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    filters:
+      - multiply: 0.1
+
+  # Word 120 — Outdoor discharge temp
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: discharge_temp
+    name: "Compressor Discharge Temp"
+    address: 120
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    skip_updates: 4
+
+  # Word 121 — Outdoor suction temp
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: suction_temp
+    name: "Compressor Suction Temp"
+    address: 121
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    skip_updates: 4
+
+  # ---------- Berekende targets door de unit zelf ----------
+
+  # Word 131 — Auto Mode Target Temp (wat de unit berekent op weersafhankelijk)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: auto_mode_target_temp
+    name: "Auto Mode Target Temp"
+    address: 131
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    skip_updates: 2
+
+  # Word 133 — Floor Debug Target Temp
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: floor_debug_target_temp
+    name: "Floor Debug Target Temp"
+    address: 133
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    accuracy_decimals: 0
+    skip_updates: 30
+
+  # Word 134 — Floor Debug Total Runtime
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: floor_debug_runtime
+    name: "Floor Debug Total Runtime"
+    address: 134
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "h"
+    state_class: total_increasing
+    accuracy_decimals: 0
+    skip_updates: 30
+
+# ============================================================
+# TEXT SENSORS
+# ============================================================
+text_sensor:
+
+  # Word 117 — ODU Running Mode (1=Cool, 2=Heat, 6=Hot water, 8=Off)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: running_mode
+    name: "Running Mode"
+    register_type: holding
+    address: 117
+    response_size: 2
+    lambda: |-
+      uint16_t value = (uint16_t(data[0]) << 8) | data[1];
+      switch (value) {
+        case 1: return std::string("Cool");
+        case 2: return std::string("Heat");
+        case 6: return std::string("Hot water");
+        case 8: return std::string("Off");
+        default: return std::string("Unknown");
+      }
+
+  # Word 135 — Sanitizing State (1=Sanitizing, 2=Finished, 3=Failed)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: sanitizing_state
+    name: "Sanitizing State"
+    register_type: holding
+    address: 135
+    response_size: 2
+    skip_updates: 5
+    lambda: |-
+      uint16_t value = (uint16_t(data[0]) << 8) | data[1];
+      switch (value) {
+        case 1: return std::string("Sanitizing");
+        case 2: return std::string("Finished");
+        case 3: return std::string("Failed");
+        default: return std::string("Idle");
+      }
+
+# ============================================================
+# BINARY SENSORS
+# ============================================================
+binary_sensor:
+
+  # ---------- Operationele status (zichtbaar in HA) ----------
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: defrosting_state
+    name: "Defrosting"
+    register_type: coil
+    address: 86
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: compressor_state
+    name: "Compressor Running"
+    register_type: coil
+    address: 80
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: odu_fan_1
+    name: "ODU Fan 1"
+    register_type: coil
+    address: 81
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: odu_fan_2
+    name: "ODU Fan 2"
+    register_type: coil
+    address: 82
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: four_way_valve
+    name: "4-Way Valve"
+    register_type: coil
+    address: 83
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: crankcase_heater
+    name: "Compressor Crankcase Heater"
+    register_type: coil
+    address: 84
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: three_way_valve
+    name: "3-Way Valve (CV/Tap)"
+    register_type: coil
+    address: 168
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: idu_eheater_1
+    name: "IDU E-Heater 1"
+    register_type: coil
+    address: 171
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: idu_eheater_2
+    name: "IDU E-Heater 2"
+    register_type: coil
+    address: 172
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: water_tank_heater
+    name: "Water Tank Heater"
+    register_type: coil
+    address: 173
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: idu_water_pump
+    name: "IDU Water Pump"
+    register_type: coil
+    address: 175
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: flow_switch
+    name: "Water Flow Switch"
+    register_type: coil
+    address: 170
+
+  # ---------- Error-bits (intern, gebruikt voor samengevoegde sensor) ----------
+  # Alle 'internal: true' = wel uitgelezen via Modbus, niet zichtbaar in HA.
+
+  # Compressor / refrigerant errors (Byte 11-12, bits 88-103)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_ambient_sensor
+    register_type: coil
+    address: 88
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_condenser_sensor
+    register_type: coil
+    address: 89
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_discharge_sensor
+    register_type: coil
+    address: 90
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_suction_sensor
+    register_type: coil
+    address: 91
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_odu_fan
+    register_type: coil
+    address: 92
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_compressor_overload
+    register_type: coil
+    address: 93
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_high_pressure
+    register_type: coil
+    address: 94
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_low_pressure
+    register_type: coil
+    address: 95
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_high_discharge
+    register_type: coil
+    address: 96
+    internal: true
+
+  # Communicatie-errors
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_comm_wired_idu
+    register_type: coil
+    address: 64
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_comm_wired_odu
+    register_type: coil
+    address: 65
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_comm_idu_odu
+    register_type: coil
+    address: 98
+    internal: true
+
+  # Refrigerant / IDU
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_refrigerant_loss
+    register_type: coil
+    address: 112
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_water_pump
+    register_type: coil
+    address: 113
+    internal: true
+
+  # IDU sensors (152-161)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_cond_leaving_sensor
+    register_type: coil
+    address: 152
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_eheater_leaving_sensor
+    register_type: coil
+    address: 153
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_cond_entering_sensor
+    register_type: coil
+    address: 155
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_tank_sensor_1
+    register_type: coil
+    address: 156
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_tank_sensor_2
+    register_type: coil
+    address: 157
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_remote_room_sensor
+    register_type: coil
+    address: 160
+    internal: true
+
+  # IDU protections (188-191)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_water_flow
+    register_type: coil
+    address: 188
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_idu_recoverable
+    register_type: coil
+    address: 190
+    internal: true
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: err_idu_irrecoverable
+    register_type: coil
+    address: 191
+    internal: true
+
+  # ---------- Samengevoegde "Heat Pump Error" sensor ----------
+  # Update elke 20s op basis van alle losse error-bits hierboven.
+
+  - platform: template
+    name: "Heat Pump Error"
+    id: heat_pump_error
+    device_class: problem
+    lambda: |-
+      return
+        id(err_ambient_sensor).state         || id(err_condenser_sensor).state    ||
+        id(err_discharge_sensor).state       || id(err_suction_sensor).state      ||
+        id(err_odu_fan).state                || id(err_compressor_overload).state ||
+        id(err_high_pressure).state          || id(err_low_pressure).state        ||
+        id(err_high_discharge).state         ||
+        id(err_comm_wired_idu).state         || id(err_comm_wired_odu).state      ||
+        id(err_comm_idu_odu).state           ||
+        id(err_refrigerant_loss).state       || id(err_water_pump).state          ||
+        id(err_cond_leaving_sensor).state    || id(err_eheater_leaving_sensor).state ||
+        id(err_cond_entering_sensor).state   || id(err_tank_sensor_1).state       ||
+        id(err_tank_sensor_2).state          || id(err_remote_room_sensor).state  ||
+        id(err_water_flow).state             || id(err_idu_recoverable).state     ||
+        id(err_idu_irrecoverable).state;
+
+# ============================================================
+# SWITCHES
+# ============================================================
+switch:
+
+  # Aan/uit: Word 1 verwacht 0xAA (ON) / 0x55 (OFF) — geen bitmask!
+  - platform: template
+    id: unit_power
+    name: "Unit Power"
+    optimistic: true
+    turn_on_action:
+      - lambda: |-
+          esphome::modbus_controller::ModbusController *ctrl = id(unitherm3);
+          std::vector<uint16_t> payload = { 0x00AA };
+          esphome::modbus_controller::ModbusCommandItem cmd =
+            esphome::modbus_controller::ModbusCommandItem::create_write_multiple_command(
+              ctrl, 1, 1, payload);
+          ctrl->queue_command(cmd);
+    turn_off_action:
+      - lambda: |-
+          esphome::modbus_controller::ModbusController *ctrl = id(unitherm3);
+          std::vector<uint16_t> payload = { 0x0055 };
+          esphome::modbus_controller::ModbusCommandItem cmd =
+            esphome::modbus_controller::ModbusCommandItem::create_write_multiple_command(
+              ctrl, 1, 1, payload);
+          ctrl->queue_command(cmd);
+
+  # Coil-switches
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: fast_hot_water
+    name: "Fast Hot Water"
+    register_type: coil
+    address: 17
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: auto_mode
+    name: "Weather Dependent (Auto Mode)"
+    register_type: coil
+    address: 22
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: control_mode_room
+    name: "Control by Room Temp"
+    register_type: coil
+    address: 16
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: quiet_mode
+    name: "Quiet Mode"
+    register_type: coil
+    address: 21
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: sanitization_mode
+    name: "Sanitization Mode"
+    register_type: coil
+    address: 23
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: emergency_mode
+    name: "Emergency Mode"
+    register_type: coil
+    address: 25
+
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: holiday_mode
+    name: "Holiday Mode"
+    register_type: coil
+    address: 34
+
+# ============================================================
+# NUMBERS  (setpoints — hoge skip_updates want ze veranderen zelden)
+# ============================================================
+number:
+
+  # ---------- Basis-setpoints (vaak gebruikt) ----------
+
+  # Word 12 — Indoor temp set point voor HEATING
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: indoor_temp_set_heat
+    name: "Indoor Temp Set Point Heating"
+    address: 12
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 18
+    max_value: 30
+    step: 1
+    mode: box
+
+  # Word 11 — Indoor temp set point voor COOLING
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: indoor_temp_set_cool
+    name: "Indoor Temp Set Point Cooling"
+    address: 11
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 18
+    max_value: 30
+    step: 1
+    mode: box
+
+  # Word 13 — Water tank temp set point
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: water_tank_temp_set
+    name: "Water Tank Temp Set Point"
+    address: 13
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 40
+    max_value: 80
+    step: 1
+    mode: box
+
+  # Word 9 — Leaving water temp voor COOLING
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: leaving_water_temp_cool
+    name: "Leaving Water Temp Cooling"
+    address: 9
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 7
+    max_value: 25
+    step: 1
+    mode: box
+
+  # Word 10 — Leaving water temp voor HEATING
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: leaving_water_temp_heat
+    name: "Leaving Water Temp Heating"
+    address: 10
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 25
+    max_value: 63
+    step: 1
+    mode: box
+
+  # ---------- E-heater / aux heater (energiebesparing!) ----------
+
+  # Word 14 — Ambient temp voor starten E-heater (-22~18°C)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: eheater_start_temp
+    name: "E-Heater Start Ambient Temp"
+    address: 14
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: -22
+    max_value: 18
+    step: 1
+    mode: box
+    skip_updates: 30
+
+  # Word 15 — Ambient temp voor starten aux heater (-22~18°C)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: aux_heater_start_temp
+    name: "Aux Heater Start Ambient Temp"
+    address: 15
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: -22
+    max_value: 18
+    step: 1
+    mode: box
+    skip_updates: 30
+
+  # Word 16 — Max water temp heat pump (40~50°C)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: max_water_temp_hp
+    name: "Max Water Temp Heat Pump"
+    address: 16
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 40
+    max_value: 50
+    step: 1
+    mode: box
+    skip_updates: 30
+
+  # ---------- Werkbereik & stooklijn-grenzen ----------
+
+  # Word 17 — Ambient temp upper limit voor HEATING
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: amb_upper_heat
+    name: "Heating Ambient Upper Limit"
+    address: 17
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 10
+    max_value: 37
+    step: 1
+    mode: box
+    skip_updates: 30
+
+  # Word 18 — Ambient temp lower limit voor HEATING
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: amb_lower_heat
+    name: "Heating Ambient Lower Limit"
+    address: 18
+    register_type: holding
+    value_type: S_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: -22
+    max_value: 5
+    step: 1
+    mode: box
+    skip_updates: 30
+
+  # Word 21 — Water temp upper limit HEATING (stooklijn high)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: water_upper_heat
+    name: "Heating Water Upper Limit"
+    address: 21
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 35
+    max_value: 60
+    step: 1
+    mode: box
+    skip_updates: 30
+
+  # Word 22 — Water temp lower limit HEATING (stooklijn low)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: water_lower_heat
+    name: "Heating Water Lower Limit"
+    address: 22
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 25
+    max_value: 58
+    step: 1
+    mode: box
+    skip_updates: 30
+
+  # ---------- Deviation / hysterese tuning ----------
+
+  # Word 30 — Heating temperature deviation (2~10°C)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: t_heat_deviation
+    name: "T-Heat Deviation"
+    address: 30
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    min_value: 2
+    max_value: 10
+    step: 1
+    mode: box
+
+  # Word 31 — Hot water temp deviation (2~8°C)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: t_hotwater_deviation
+    name: "T-Hot Water Deviation"
+    address: 31
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    min_value: 2
+    max_value: 8
+    step: 1
+    mode: box
+    skip_updates: 30
+
+  # Word 33 — Room temp control deviation (1~5°C)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: room_control_deviation
+    name: "Room Temp Control Deviation"
+    address: 33
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    min_value: 1
+    max_value: 5
+    step: 1
+    mode: box
+    skip_updates: 30
+
+  # Word 34 — Runtime setting (min. draaitijd 1~10 min)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: runtime_setting
+    name: "Minimum Runtime"
+    address: 34
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "min"
+    min_value: 1
+    max_value: 10
+    step: 1
+    mode: box
+    skip_updates: 30
+
+  # ---------- Sanitization (legionella) ----------
+
+  # Word 4 — Sanitizing temp (40~70°C)
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: sanitizing_temp
+    name: "Sanitizing Temp"
+    address: 4
+    register_type: holding
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    device_class: temperature
+    min_value: 40
+    max_value: 70
+    step: 1
+    mode: box
+    skip_updates: 30
+
+# ============================================================
+# SELECT
+# ============================================================
+select:
+
+  # Word 2 — Mode setting (wijzigbaar als unit UIT staat, zie PDF §5.2)
+  # NB: select.modbus_controller ondersteunt alleen holding registers,
+  # 'register_type' is GEEN geldige parameter hier.
+  - platform: modbus_controller
+    modbus_controller_id: unitherm3
+    id: mode_select
+    name: "Mode Setting"
+    address: 2
+    value_type: U_WORD
+    optionsmap:
+      "Heat": 1
+      "Hot water": 2
+      "Cool + Hot water": 3
+      "Heat + Hot water": 4
+      "Cool": 5
